@@ -48,6 +48,65 @@ function Invoke-LoggedCommand {
     }
 }
 
+function Ensure-FirewallRule {
+    param(
+        [string]$RuleName,
+        [ValidateSet("Inbound", "Outbound")]
+        [string]$Direction
+    )
+
+    $existingRule = Get-NetFirewallRule -DisplayName $RuleName -ErrorAction SilentlyContinue
+    if ($null -ne $existingRule) {
+        Write-InstallLog "Firewall rule already exists: $RuleName" "DEBUG"
+        return
+    }
+
+    Write-InstallLog "Creating firewall rule: $RuleName ($Direction, TCP 8088, Profile=Any)"
+    $firewallParams = @{
+        DisplayName = $RuleName
+        Direction = $Direction
+        Action = 'Allow'
+        Protocol = 'TCP'
+        LocalPort = 8088
+        Profile = 'Any'
+        Enabled = 'True'
+        ErrorAction = 'Stop'
+    }
+
+    New-NetFirewallRule @firewallParams | Out-Null
+
+    Write-InstallLog "Firewall rule created: $RuleName"
+}
+
+function Ensure-LanPingFirewallRule {
+    param(
+        [string]$RuleName
+    )
+
+    $existingRule = Get-NetFirewallRule -DisplayName $RuleName -ErrorAction SilentlyContinue
+    if ($null -ne $existingRule) {
+        Write-InstallLog "Firewall rule already exists: $RuleName" "DEBUG"
+        return
+    }
+
+    Write-InstallLog "Creating firewall rule: $RuleName (Inbound, ICMPv4 Echo Request, RemoteAddress=LocalSubnet, Profile=Any)"
+    $pingFirewallParams = @{
+        DisplayName = $RuleName
+        Direction = 'Inbound'
+        Action = 'Allow'
+        Protocol = 'ICMPv4'
+        IcmpType = 8
+        RemoteAddress = 'LocalSubnet'
+        Profile = 'Any'
+        Enabled = 'True'
+        ErrorAction = 'Stop'
+    }
+
+    New-NetFirewallRule @pingFirewallParams | Out-Null
+
+    Write-InstallLog "Firewall rule created: $RuleName"
+}
+
 Initialize-InstallLog
 Write-InstallLog "=========== install-service.ps1 started =========="
 Write-InstallLog "Parameters: ServiceName=$ServiceName; InstallPath=$InstallPath; SourcePath=$SourcePath"
@@ -64,6 +123,18 @@ if (-not (Test-IsAdministrator)) {
 }
 
 Write-InstallLog "Administrator check passed."
+
+Write-InstallLog "Ensuring firewall rules exist for TCP 8088 on all profiles"
+try {
+    Ensure-FirewallRule -RuleName "LibreHardwareMonitorService TCP 8088 Inbound" -Direction "Inbound"
+    Ensure-FirewallRule -RuleName "LibreHardwareMonitorService TCP 8088 Outbound" -Direction "Outbound"
+    Ensure-LanPingFirewallRule -RuleName "LibreHardwareMonitorService ICMPv4 Echo In LAN"
+    Write-InstallLog "Firewall rule check completed for TCP 8088 and LAN ping"
+}
+catch {
+    Write-InstallLog "Failed to configure firewall rules: $($_.Exception.Message)" "ERROR"
+    throw
+}
 
 #Write-Host "Installing $ServiceName to $InstallPath"
 #Write-InstallLog "Ensuring install directory exists: $InstallPath"
@@ -136,6 +207,41 @@ if (-not (Test-Path -Path $telegrafConfigSource)) {
 Write-InstallLog "Copying Telegraf config from $telegrafConfigSource to $telegrafConfigTarget"
 Copy-Item -Path $telegrafConfigSource -Destination $telegrafConfigTarget -Force
 Write-InstallLog "Telegraf config copy completed: $telegrafConfigTarget"
+
+$telegrafDesiredBinPath = "c:\Telegraf\telegraf.exe --config c:\Telegraf\telegraf.conf --config-directory c:\Telegraf\telegraf.d --service-name telegraf"
+
+Write-InstallLog "Checking Telegraf service registration for --config-directory"
+$telegrafQcOutput = & sc.exe qc telegraf 2>&1
+foreach ($line in $telegrafQcOutput) {
+    Write-InstallLog ("sc.exe output: " + $line) "DEBUG"
+}
+
+if ($LASTEXITCODE -ne 0) {
+    Write-InstallLog "Failed to query telegraf service configuration (exit code $LASTEXITCODE)." "ERROR"
+    throw "Failed to query telegraf service configuration."
+}
+
+$binaryPathPattern = "(BINARY_PATH_NAME|NOME_DO_CAMINHO).*:\s*(.+)$"
+$binaryPathLine = $telegrafQcOutput | Where-Object { $_ -match $binaryPathPattern } | Select-Object -First 1
+if ($null -eq $binaryPathLine) {
+    Write-InstallLog "Could not determine Telegraf binary path from service query output (BINARY_PATH_NAME or NOME_DO_CAMINHO_BINARIO)." "ERROR"
+    throw "Telegraf binary path label not found in service query output."
+}
+
+$binaryPathMatch = [regex]::Match($binaryPathLine, $binaryPathPattern)
+$currentTelegrafBinPath = $binaryPathMatch.Groups[2].Value.Trim()
+Write-InstallLog "Current telegraf binPath: $currentTelegrafBinPath"
+
+if ($currentTelegrafBinPath -notmatch "--config-directory") {
+    Write-InstallLog "Telegraf service is missing --config-directory. Updating service startup command."
+    Invoke-LoggedCommand -CommandText "sc.exe config telegraf binPath= \"$telegrafDesiredBinPath\"" -Command {
+        & sc.exe config telegraf binPath= $telegrafDesiredBinPath
+    }
+    Write-InstallLog "Telegraf service binPath updated to include --config-directory"
+}
+else {
+    Write-InstallLog "Telegraf service already has --config-directory in startup command" "DEBUG"
+}
 
 Write-InstallLog "Restarting Telegraf service to apply config changes"
 try {
