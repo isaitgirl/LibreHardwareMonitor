@@ -1,0 +1,7 @@
+{
+  "refreshInterval": "00:01:00",
+  "logLevel": "INFO",
+  "httpPort": 8088,
+  "writeMetricsToFile": false,
+  "writeMetricsInterval": "00:01:00"
+}
