@@ -48,7 +48,7 @@ function Invoke-LoggedCommand {
     }
 }
 
-function Ensure-FirewallRule {
+function New-MetricsFirewallRule {
     param(
         [string]$RuleName,
         [ValidateSet("Inbound", "Outbound")]
@@ -78,7 +78,7 @@ function Ensure-FirewallRule {
     Write-InstallLog "Firewall rule created: $RuleName"
 }
 
-function Ensure-LanPingFirewallRule {
+function New-LanPingFirewallRule {
     param(
         [string]$RuleName
     )
@@ -126,9 +126,9 @@ Write-InstallLog "Administrator check passed."
 
 Write-InstallLog "Ensuring firewall rules exist for TCP 8088 on all profiles"
 try {
-    Ensure-FirewallRule -RuleName "LibreHardwareMonitorService TCP 8088 Inbound" -Direction "Inbound"
-    Ensure-FirewallRule -RuleName "LibreHardwareMonitorService TCP 8088 Outbound" -Direction "Outbound"
-    Ensure-LanPingFirewallRule -RuleName "LibreHardwareMonitorService ICMPv4 Echo In LAN"
+    New-MetricsFirewallRule -RuleName "LibreHardwareMonitorService TCP 8088 Inbound" -Direction "Inbound"
+    New-MetricsFirewallRule -RuleName "LibreHardwareMonitorService TCP 8088 Outbound" -Direction "Outbound"
+    New-LanPingFirewallRule -RuleName "LibreHardwareMonitorService ICMPv4 Echo In LAN"
     Write-InstallLog "Firewall rule check completed for TCP 8088 and LAN ping"
 }
 catch {
